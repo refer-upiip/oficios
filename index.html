@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verificación de oficios · REFER</title>
+<meta name="robots" content="noindex">
+<style>
+  :root { --dark:#2B1250; --mid:#6B3F8F; --gray:#8A8A9A; --light:#F1ECF6; --soft:#DCD0E8;
+          --ok:#1E7B46; --okbg:#E6F4EC; --bad:#A3262A; --badbg:#FBEAEA; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Times New Roman",Times,serif; color:#222; background:#fff;
+         border-left:8px solid var(--dark); min-height:100vh; }
+  header { display:flex; align-items:center; justify-content:space-between; gap:16px;
+           padding:18px 24px; border-bottom:2px solid var(--mid); flex-wrap:wrap; }
+  header img { height:56px; }
+  header .inst img { height:52px; margin-left:12px; }
+  main { max-width:680px; margin:32px auto; padding:0 16px; }
+  h1 { color:var(--dark); font-size:1.8rem; margin:0 0 4px; }
+  .sub { color:var(--gray); margin:0 0 24px; }
+  form { background:var(--light); padding:18px; border-radius:4px; display:grid; gap:10px; }
+  label { font-weight:bold; color:var(--dark); font-size:.95rem; }
+  input { font:inherit; font-size:1.05rem; padding:8px 10px; border:1px solid var(--soft);
+          border-radius:3px; text-transform:uppercase; width:100%; }
+  button { font:inherit; font-weight:bold; background:var(--dark); color:#fff; border:0;
+           padding:10px; border-radius:3px; cursor:pointer; }
+  button:hover { background:var(--mid); }
+  #res { margin-top:24px; }
+  .card { border-radius:4px; padding:18px 20px; border-left:6px solid; }
+  .ok  { background:var(--okbg);  border-color:var(--ok); }
+  .bad { background:var(--badbg); border-color:var(--bad); }
+  .card h2 { margin:0 0 10px; font-size:1.35rem; }
+  .ok h2 { color:var(--ok); } .bad h2 { color:var(--bad); }
+  dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 14px; margin:0; }
+  dt { color:var(--gray); } dd { margin:0; font-weight:bold; }
+  details { margin-top:14px; background:#fff; border:1px solid var(--soft); border-radius:3px; padding:8px 12px; }
+  summary { cursor:pointer; font-weight:bold; color:var(--dark); }
+  .texto p { text-align:justify; margin:.6em 0; } .texto ul { margin:.4em 0; }
+  .chk { font-size:.95rem; margin:12px 0 0; padding:0; list-style:none; }
+  .chk li { margin:3px 0; }
+  .tecnico { font-size:.8rem; word-break:break-all; margin:12px 0 0; }
+  footer { text-align:center; color:var(--gray); font-size:.9rem; margin:40px 0 24px; }
+  a { color:var(--mid); }
+  .r { display:inline-block; transform:scaleX(-1); }  /* R final en espejo, como en el logo */
+</style>
+</head>
+<body>
+<header>
+  <img src="img/logo_refer.png" alt="REFER Revista Ferroviaria">
+  <span class="inst"><img src="img/logo_ipn.png" alt="IPN"><img src="img/logo_upiip.png" alt="UPIIP"></span>
+</header>
+<main>
+  <h1>Verificación de oficios</h1>
+  <p class="sub">REFE<span class="r">R</span> Revista Ferroviaria: Tecnología, Innovación, Política y Sociedad</p>
+
+  <form id="f">
+    <label for="folio">Número de oficio</label>
+    <input id="folio" placeholder="REFER-OF-2026-0001" autocomplete="off" required>
+    <label for="codigo">Código de verificación</label>
+    <input id="codigo" placeholder="10 caracteres" autocomplete="off" required>
+    <button type="submit">Verificar</button>
+  </form>
+  <div id="res" aria-live="polite"></div>
+</main>
+<footer>Dudas sobre un oficio: <a href="mailto:refer.upiip@ipn.mx">refer.upiip@ipn.mx</a></footer>
+
+<script>
+const enc = new TextEncoder();
+const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const sha = async s => new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(s)));
+const hex = b => Array.from(b, x => x.toString(16).padStart(2, "0")).join("");
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const marca = s => s.replace(/\bREFER\b(?!-)/g, "REFE<span class='r'>R</span>");
+const fmt = s => marca(esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>"));
+const res = document.getElementById("res");
+
+// Mismo formato que generar_oficios.py: párrafos separados por línea en blanco; "- " = viñeta
+function textoHTML(t) {
+  return t.split(/\n\s*\n/).map(b => {
+    let html = "", par = [], lista = [];
+    const cerrarPar = () => { if (par.length) { html += `<p>${fmt(par.join(" "))}</p>`; par = []; } };
+    const cerrarLista = () => { if (lista.length) { html += "<ul>" + lista.map(i => `<li>${fmt(i)}</li>`).join("") + "</ul>"; lista = []; } };
+    b.split("\n").map(l => l.trim()).filter(Boolean).forEach(l => {
+      if (l.startsWith("- ")) { cerrarPar(); lista.push(l.slice(2).trim()); }
+      else { cerrarLista(); par.push(l); }
+    });
+    cerrarPar(); cerrarLista(); return html;
+  }).join("");
+}
+
+// Comprueba el sello Ed25519 con la llave pública publicada junto a esta página.
+async function comprobarSello(cadena, sello) {
+  try {
+    const pem = await (await fetch("llave_publica.pem", {cache: "no-store"})).text();
+    const der = b64(pem.replace(/-----[^-]+-----|\s/g, ""));
+    const llave = await crypto.subtle.importKey("spki", der, {name: "Ed25519"}, false, ["verify"]);
+    return await crypto.subtle.verify({name: "Ed25519"}, llave, b64(sello), enc.encode(cadena));
+  } catch (e) { return null; }   // navegador sin soporte para Ed25519
+}
+
+async function verificar(folio, codigo) {
+  folio = folio.trim().toUpperCase(); codigo = codigo.trim().toUpperCase().replace(/\s/g, "");
+  res.innerHTML = "<p>Verificando…</p>";
+  let d;
+  try {
+    const reg = await (await fetch("registro.json", {cache: "no-store"})).json();
+    const r = reg.registros[hex(await sha(`REFER-OF-id|${folio}|${codigo}`))];
+    if (!r) return mostrarInvalido();
+    const key = await crypto.subtle.importKey("raw", await sha(`REFER-OF-key|${folio}|${codigo}`), "AES-GCM", false, ["decrypt"]);
+    d = JSON.parse(new TextDecoder().decode(
+      await crypto.subtle.decrypt({name: "AES-GCM", iv: b64(r.iv)}, key, b64(r.ct))));
+  } catch (e) { return mostrarInvalido(); }
+
+  // La huella del texto debe coincidir con la que va dentro de la cadena original firmada.
+  const huella = hex(await sha(d.cuerpo));
+  const huellaOK = d.cadena.split("|").includes(huella);
+  const selloOK = await comprobarSello(d.cadena, d.sello);
+  const vigente = d.estado === "vigente";
+  const valido = vigente && huellaOK && selloOK !== false;
+  const titulo = !huellaOK || selloOK === false ? "✖ El sello digital no coincide"
+               : vigente ? "✔ Oficio auténtico y vigente" : "✖ Oficio cancelado";
+  const texto = !huellaOK || selloOK === false
+      ? "Los datos registrados no corresponden con el sello digital. No confíe en este documento y escriba a refer.upiip@ipn.mx."
+      : vigente ? "Este oficio fue emitido y firmado electrónicamente por REFE<span class='r'>R</span> Revista Ferroviaria y se encuentra vigente. Compare el texto con el documento que recibió."
+                : "Este oficio fue emitido por REFE<span class='r'>R</span>, pero fue cancelado y ya no tiene validez.";
+  const sello = selloOK === true ? "✔ Sello digital Ed25519 comprobado con la llave pública de REFE<span class='r'>R</span>."
+              : selloOK === false ? "✖ El sello digital no es válido."
+              : "• Su navegador no permite comprobar el sello aquí; puede comprobarlo con la llave pública.";
+  res.innerHTML = `<div class="card ${valido ? "ok" : "bad"}">
+    <h2>${titulo}</h2><p>${texto}</p>
+    <dl>
+      <dt>Oficio núm.</dt><dd>${esc(d.folio)}</dd>
+      <dt>Fecha</dt><dd>${esc(d.fecha)}</dd>
+      <dt>Asunto</dt><dd>${marca(esc(d.asunto))}</dd>
+      <dt>Dirigido a</dt><dd>${esc(d.destinatario)}${d.cargo_destinatario ? `<br><span style="font-weight:normal">${esc(d.cargo_destinatario)}</span>` : ""}</dd>
+      ${d.institucion ? `<dt>Institución</dt><dd>${esc(d.institucion)}</dd>` : ""}
+      ${d.anexos ? `<dt>Anexos</dt><dd>${esc(d.anexos)}</dd>` : ""}
+      <dt>Firma</dt><dd>${marca(esc(d.emite))}</dd>
+    </dl>
+    <ul class="chk">
+      <li>${huellaOK ? "✔ El texto registrado coincide con la huella SHA-256 firmada." : "✖ El texto registrado no coincide con la huella firmada."}</li>
+      <li>${sello}</li>
+    </ul>
+    <details><summary>Ver el texto completo del oficio</summary><div class="texto">${textoHTML(d.cuerpo)}</div>
+      ${d.ccp && d.ccp.length ? `<p style="font-size:.9rem"><b>c.c.p.</b> ${d.ccp.map(fmt).join("; ")}</p>` : ""}</details>
+    <p class="tecnico"><b>Cadena original:</b> ${esc(d.cadena)}<br><b>Huella SHA-256 del texto:</b> ${huella}<br>
+      <b>Sello digital (Ed25519):</b> ${esc(d.sello)}<br><a href="llave_publica.pem">Llave pública de REFE<span class="r">R</span> para oficios</a></p>
+  </div>`;
+}
+function mostrarInvalido() {
+  res.innerHTML = `<div class="card bad"><h2>✖ No se encontró el oficio</h2>
+    <p>El número de oficio y el código no corresponden a ningún oficio emitido por REFE<span class="r">R</span>.
+    Revise que los haya capturado correctamente o escriba a refer.upiip@ipn.mx.</p></div>`;
+}
+document.getElementById("f").addEventListener("submit", e => {
+  e.preventDefault(); verificar(folio.value, codigo.value);
+});
+const q = new URLSearchParams(location.search);
+if (q.get("f") && q.get("c")) {
+  folio.value = q.get("f"); codigo.value = q.get("c"); verificar(q.get("f"), q.get("c"));
+}
+</script>
+</body>
+</html>
